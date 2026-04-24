@@ -24,11 +24,36 @@ services:
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
     healthcheck:
       test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+
+  kafka-2:
+    image: confluentinc/cp-kafka:7.6.0
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 2
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:29093,PLAINTEXT_HOST://localhost:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 2
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9093"]
       interval: 15s
       timeout: 10s
       retries: 10
@@ -38,11 +63,13 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+      kafka-2:
+        condition: service_healthy
     ports:
       - "8081:8081"
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
-      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092,kafka-2:29093
       SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/subjects"]
@@ -54,6 +81,8 @@ services:
     image: confluentinc/cp-kafka:7.6.0
     depends_on:
       kafka:
+        condition: service_healthy
+      kafka-2:
         condition: service_healthy
       schema-registry:
         condition: service_healthy
@@ -99,6 +128,35 @@ services:
       timeout: 5s
       retries: 5
 
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9001:9000"
+      - "9002:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 minioadmin minioadmin &&
+        mc mb --ignore-existing local/movie-analytics &&
+        echo 'Bucket movie-analytics ready'
+      "
+
   movie-producer:
     build:
       context: ./movie-producer
@@ -111,7 +169,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      KAFKA_BROKERS: kafka:29092
+      KAFKA_BROKERS: kafka:29092,kafka-2:29093
       SCHEMA_REGISTRY_URL: http://schema-registry:8081
       KAFKA_TOPIC: movie-events
       SERVER_PORT: 3000
@@ -128,6 +186,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     ports:
       - "3001:3001"
     environment:
@@ -136,8 +196,36 @@ services:
       DATABASE_URL: postgres://analytics:analytics_pass@postgres/cinema_analytics
       SERVER_PORT: 3001
       SCHEDULE_INTERVAL_SECS: 3600
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: minioadmin
+      S3_BUCKET: movie-analytics
       RUST_LOG: info
+
+  grafana:
+    image: grafana/grafana-oss:10.4.2
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "3030:3000"
+    environment:
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
 
 volumes:
   clickhouse-data:
   postgres-data:
+  minio-data:
+  grafana-data:

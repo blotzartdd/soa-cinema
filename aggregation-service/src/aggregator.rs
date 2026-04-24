@@ -8,6 +8,7 @@ use crate::{
     clickhouse::ClickHouseClient,
     metrics::DailyMetrics,
     postgres::PostgresClient,
+    s3_export::S3ExportClient,
 };
 
 pub struct AggregationResult {
@@ -20,6 +21,7 @@ pub async fn run_for_date(
     date: NaiveDate,
     ch: &ClickHouseClient,
     pg: &PostgresClient,
+    s3: &S3ExportClient,
 ) -> Result<AggregationResult> {
     let start = Instant::now();
     info!(date = %date, "Aggregation cycle started");
@@ -52,6 +54,10 @@ pub async fn run_for_date(
     }
 
     pg.upsert_metrics(&metrics).await?;
+
+    if let Err(e) = s3.export_date(date, pg).await {
+        error!(error = %e, date = %date, "S3 export failed");
+    }
 
     let duration_ms = start.elapsed().as_millis() as u64;
 

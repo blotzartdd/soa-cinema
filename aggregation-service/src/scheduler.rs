@@ -14,7 +14,7 @@ pub fn start(state: Arc<AppState>, interval_secs: u64) {
         loop {
             ticker.tick().await;
             let date = (Utc::now() - chrono::Duration::days(1)).date_naive();
-            if let Err(e) = aggregator::run_for_date(date, &state.ch, &state.pg).await {
+            if let Err(e) = aggregator::run_for_date(date, &state.ch, &state.pg, &state.s3).await {
                 error!(error = %e, date = %date, "Scheduled aggregation failed");
             }
         }

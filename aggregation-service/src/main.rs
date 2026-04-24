@@ -4,6 +4,7 @@ mod clickhouse;
 mod config;
 mod metrics;
 mod postgres;
+mod s3_export;
 mod scheduler;
 
 use std::sync::Arc;
@@ -31,10 +32,17 @@ async fn main() -> anyhow::Result<()> {
     info!("PostgreSQL migrations applied");
 
     let ch = clickhouse::ClickHouseClient::new(&cfg.clickhouse_url, &cfg.clickhouse_db);
+    let s3 = s3_export::S3ExportClient::new(
+        &cfg.s3_endpoint,
+        &cfg.s3_access_key,
+        &cfg.s3_secret_key,
+        &cfg.s3_bucket,
+    );
 
     let state = Arc::new(api::AppState {
         ch: Arc::new(ch),
         pg: Arc::new(pg),
+        s3: Arc::new(s3),
     });
 
     scheduler::start(state.clone(), cfg.schedule_interval_secs);

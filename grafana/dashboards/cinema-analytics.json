@@ -1,0 +1,173 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "grafana", "uid": "-- Grafana --" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "id": 1,
+      "title": "Retention Cohort Heatmap",
+      "description": "Cohort = users whose first VIEW_STARTED was on that date. Values = % of cohort with any event N days later.",
+      "type": "table",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "format": 0,
+          "refId": "A",
+          "rawSql": "WITH first_view AS (SELECT user_id, min(toDate(timestamp)) AS cohort_date FROM cinema.movie_events WHERE event_type = 'VIEW_STARTED' GROUP BY user_id), cohort_sizes AS (SELECT cohort_date, uniqExact(user_id) AS cohort_size FROM first_view GROUP BY cohort_date) SELECT toString(f.cohort_date) AS \"Cohort\", cs.cohort_size AS \"Size\", round(100.0 * uniqExactIf(f.user_id, toDate(e.timestamp) = f.cohort_date) / cs.cohort_size, 1) AS \"Day 0\", round(100.0 * uniqExactIf(f.user_id, toDate(e.timestamp) = f.cohort_date + 1) / cs.cohort_size, 1) AS \"Day 1\", round(100.0 * uniqExactIf(f.user_id, toDate(e.timestamp) = f.cohort_date + 2) / cs.cohort_size, 1) AS \"Day 2\", round(100.0 * uniqExactIf(f.user_id, toDate(e.timestamp) = f.cohort_date + 3) / cs.cohort_size, 1) AS \"Day 3\", round(100.0 * uniqExactIf(f.user_id, toDate(e.timestamp) = f.cohort_date + 4) / cs.cohort_size, 1) AS \"Day 4\", round(100.0 * uniqExactIf(f.user_id, toDate(e.timestamp) = f.cohort_date + 5) / cs.cohort_size, 1) AS \"Day 5\", round(100.0 * uniqExactIf(f.user_id, toDate(e.timestamp) = f.cohort_date + 6) / cs.cohort_size, 1) AS \"Day 6\", round(100.0 * uniqExactIf(f.user_id, toDate(e.timestamp) = f.cohort_date + 7) / cs.cohort_size, 1) AS \"Day 7\" FROM first_view f JOIN cinema.movie_events e ON f.user_id = e.user_id JOIN cohort_sizes cs ON f.cohort_date = cs.cohort_date GROUP BY f.cohort_date, cs.cohort_size ORDER BY f.cohort_date DESC LIMIT 30"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "custom": { "displayMode": "color-background-solid", "align": "center" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "dark-red", "value": null },
+              { "color": "semi-dark-orange", "value": 10 },
+              { "color": "super-light-yellow", "value": 30 },
+              { "color": "light-green", "value": 60 }
+            ]
+          },
+          "min": 0,
+          "max": 100,
+          "unit": "none"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Cohort" },
+            "properties": [
+              { "id": "custom.displayMode", "value": "auto" },
+              { "id": "custom.width", "value": 120 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Size" },
+            "properties": [
+              { "id": "custom.displayMode", "value": "auto" },
+              { "id": "custom.width", "value": 70 }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 2,
+      "title": "Daily Active Users (DAU)",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 12 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "format": 1,
+          "refId": "A",
+          "rawSql": "SELECT toStartOfDay(toDateTime(date)) AS time, toUInt64(metric_value) AS DAU FROM cinema.agg_daily_metrics FINAL WHERE metric_name = 'dau' ORDER BY date"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 15, "pointSize": 5 }
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 3,
+      "title": "View Conversion Rate",
+      "description": "Percentage of VIEW_STARTED sessions that result in VIEW_FINISHED",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 12 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "format": 1,
+          "refId": "A",
+          "rawSql": "SELECT toStartOfDay(toDateTime(date)) AS time, round(metric_value * 100, 2) AS \"Conversion %\" FROM cinema.agg_daily_metrics FINAL WHERE metric_name = 'conversion_rate' ORDER BY date"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "lineWidth": 2, "fillOpacity": 15 },
+          "unit": "percent",
+          "min": 0,
+          "max": 100
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Top Movies by Views",
+      "description": "Based on latest aggregated date",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 22 },
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+          "format": 0,
+          "refId": "A",
+          "rawSql": "SELECT movie_id, toUInt64(view_count) AS Views FROM cinema.agg_top_movies FINAL WHERE date = (SELECT max(date) FROM cinema.agg_top_movies FINAL) ORDER BY rank ASC"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {}
+        },
+        "overrides": []
+      },
+      "options": {
+        "xField": "movie_id",
+        "orientation": "vertical",
+        "groupWidth": 0.7,
+        "fillOpacity": 80,
+        "tooltip": { "mode": "single" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    }
+  ],
+  "refresh": "5m",
+  "schemaVersion": 39,
+  "tags": ["cinema", "analytics"],
+  "templating": { "list": [] },
+  "time": { "from": "now-30d", "to": "now" },
+  "timepicker": {},
+  "timezone": "UTC",
+  "title": "Cinema Analytics",
+  "uid": "cinema-analytics",
+  "version": 1
+}

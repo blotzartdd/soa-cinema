@@ -1,11 +1,18 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
-use sqlx::PgPool;
+use chrono::{NaiveDate, Utc};
+use sqlx::{PgPool, Row};
 use tracing::warn;
 
 use crate::metrics::DailyMetrics;
+
+pub struct ExportRow {
+    pub rank: i32,
+    pub movie_id: String,
+    pub view_count: i64,
+}
 
 pub struct PostgresClient {
     pool: PgPool,
@@ -95,5 +102,39 @@ impl PostgresClient {
         }
 
         Ok(())
+    }
+
+    pub async fn read_for_export(&self, date: NaiveDate) -> Result<(HashMap<String, f64>, Vec<ExportRow>)> {
+        let metric_rows = sqlx::query(
+            "SELECT metric_name, metric_value FROM daily_metrics WHERE date = $1",
+        )
+        .bind(date)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to read daily_metrics")?;
+
+        let metrics: HashMap<String, f64> = metric_rows
+            .iter()
+            .map(|r| (r.get::<String, _>("metric_name"), r.get::<f64, _>("metric_value")))
+            .collect();
+
+        let movie_rows = sqlx::query(
+            "SELECT rank, movie_id, view_count FROM daily_top_movies WHERE date = $1 ORDER BY rank",
+        )
+        .bind(date)
+        .fetch_all(&self.pool)
+        .await
+        .context("Failed to read daily_top_movies")?;
+
+        let top_movies = movie_rows
+            .iter()
+            .map(|r| ExportRow {
+                rank: r.get("rank"),
+                movie_id: r.get("movie_id"),
+                view_count: r.get("view_count"),
+            })
+            .collect();
+
+        Ok((metrics, top_movies))
     }
 }

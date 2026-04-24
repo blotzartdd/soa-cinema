@@ -1,4 +1,4 @@
-FROM rust:1.78 AS builder
+FROM rust:1.85 AS builder
 
 RUN apt-get update && apt-get install -y cmake libssl-dev pkg-config && rm -rf /var/lib/apt/lists/*
 

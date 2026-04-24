@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS cinema.movie_events_kafka
 )
 ENGINE = Kafka
 SETTINGS
-    kafka_broker_list = 'kafka:29092',
+    kafka_broker_list = 'kafka:29092,kafka-2:29093',
     kafka_topic_list = 'movie-events',
     kafka_group_name = 'clickhouse-consumer',
     kafka_format = 'JSONEachRow',
