@@ -25,22 +25,35 @@ impl ClickHouseClient {
         let resp = self
             .client
             .post(&self.url)
-            .query(&[("database", &self.db)])
+            .query(&[
+                ("database", self.db.as_str()),
+                ("output_format_json_quote_64bit_integers", "0"),
+            ])
             .body(full_query)
             .send()
             .await
             .context("ClickHouse query request failed")?;
 
         let status = resp.status();
-        let text = resp.text().await.context("Failed to read ClickHouse response")?;
+        let text = resp
+            .text()
+            .await
+            .context("Failed to read ClickHouse response")?;
 
         if !status.is_success() {
-            return Err(anyhow::anyhow!("ClickHouse query error ({}): {}", status, text));
+            return Err(anyhow::anyhow!(
+                "ClickHouse query error ({}): {}",
+                status,
+                text
+            ));
         }
 
         text.lines()
             .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str(l).context("Failed to parse ClickHouse row"))
+            .map(|l| {
+                serde_json::from_str(l)
+                    .with_context(|| format!("Failed to parse ClickHouse row: {l}"))
+            })
             .collect()
     }
 
@@ -67,7 +80,11 @@ impl ClickHouseClient {
         let status = resp.status();
         if !status.is_success() {
             let error_text = resp.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("ClickHouse insert error ({}): {}", status, error_text));
+            return Err(anyhow::anyhow!(
+                "ClickHouse insert error ({}): {}",
+                status,
+                error_text
+            ));
         }
         Ok(())
     }
@@ -77,9 +94,8 @@ impl ClickHouseClient {
         struct Row {
             total: u64,
         }
-        let sql = format!(
-            "SELECT count() AS total FROM movie_events WHERE toDate(timestamp) = '{date}'"
-        );
+        let sql =
+            format!("SELECT count() AS total FROM movie_events WHERE toDate(timestamp) = '{date}'");
         let rows: Vec<Row> = self.query_rows(&sql).await?;
         Ok(rows.into_iter().next().map(|r| r.total).unwrap_or(0))
     }
@@ -102,12 +118,16 @@ impl ClickHouseClient {
             avg_watch_seconds: f64,
         }
         let sql = format!(
-            "SELECT if(count() > 0, avg(progress_seconds), 0.0) AS avg_watch_seconds \
+            "SELECT avgOrDefault(progress_seconds) AS avg_watch_seconds \
              FROM movie_events \
              WHERE event_type = 'VIEW_FINISHED' AND toDate(timestamp) = '{date}'"
         );
         let rows: Vec<Row> = self.query_rows(&sql).await?;
-        Ok(rows.into_iter().next().map(|r| r.avg_watch_seconds).unwrap_or(0.0))
+        Ok(rows
+            .into_iter()
+            .next()
+            .map(|r| r.avg_watch_seconds)
+            .unwrap_or(0.0))
     }
 
     pub async fn query_top_movies(&self, date: NaiveDate) -> Result<Vec<TopMovie>> {
@@ -147,9 +167,9 @@ impl ClickHouseClient {
             "SELECT \
                countIf(event_type = 'VIEW_STARTED') AS started, \
                countIf(event_type = 'VIEW_FINISHED') AS finished, \
-               if(countIf(event_type = 'VIEW_STARTED') > 0, \
-                  toFloat64(countIf(event_type = 'VIEW_FINISHED')) / countIf(event_type = 'VIEW_STARTED'), \
-                  0.0) AS conversion_rate \
+               toFloat64(countIf(event_type = 'VIEW_FINISHED')) / \
+                 greatest(toFloat64(countIf(event_type = 'VIEW_STARTED')), 1.0) * \
+                 toFloat64(countIf(event_type = 'VIEW_STARTED') > 0) AS conversion_rate \
              FROM movie_events \
              WHERE toDate(timestamp) = '{date}' \
                AND event_type IN ('VIEW_STARTED', 'VIEW_FINISHED')"
@@ -186,8 +206,8 @@ impl ClickHouseClient {
                count() AS cohort_size, \
                countIf(has_d1) AS returned_d1, \
                countIf(has_d7) AS returned_d7, \
-               if(count() > 0, toFloat64(countIf(has_d1)) / count(), 0.0) AS retention_d1, \
-               if(count() > 0, toFloat64(countIf(has_d7)) / count(), 0.0) AS retention_d7 \
+               toFloat64(countIf(has_d1)) / greatest(toFloat64(count()), 1.0) * toFloat64(count() > 0) AS retention_d1, \
+               toFloat64(countIf(has_d7)) / greatest(toFloat64(count()), 1.0) * toFloat64(count() > 0) AS retention_d7 \
              FROM (\
                SELECT \
                  c.user_id, \
@@ -206,7 +226,13 @@ impl ClickHouseClient {
             retention_d1: 0.0,
             retention_d7: 0.0,
         });
-        Ok((row.cohort_size, row.returned_d1, row.returned_d7, row.retention_d1, row.retention_d7))
+        Ok((
+            row.cohort_size,
+            row.returned_d1,
+            row.returned_d7,
+            row.retention_d1,
+            row.retention_d7,
+        ))
     }
 
     pub async fn write_aggregates(&self, m: &DailyMetrics) -> Result<()> {
@@ -230,13 +256,15 @@ impl ClickHouseClient {
         let movie_rows: Vec<serde_json::Value> = m
             .top_movies
             .iter()
-            .map(|movie| serde_json::json!({
-                "date": date_str,
-                "movie_id": movie.movie_id,
-                "view_count": movie.view_count,
-                "rank": movie.rank,
-                "computed_at": computed_at,
-            }))
+            .map(|movie| {
+                serde_json::json!({
+                    "date": date_str,
+                    "movie_id": movie.movie_id,
+                    "view_count": movie.view_count,
+                    "rank": movie.rank,
+                    "computed_at": computed_at,
+                })
+            })
             .collect();
         self.insert_rows("agg_top_movies", &movie_rows).await?;
 
